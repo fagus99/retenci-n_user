@@ -1,51 +1,83 @@
-
 import streamlit as st
 import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
 
-st.title("Análisis de Retención de Usuarios")
+st.set_page_config(page_title="Análisis de Retención por Cohortes")
 
-# Cargar archivo
-archivo = st.file_uploader("Subí tu archivo en formato Excel", type=["xlsx"])
+st.title("Análisis de Retención de Usuarios por Cohortes")
+st.markdown("""
+Subí un archivo Excel que contenga las columnas clave:
+- **Usuario:** identificador único del usuario.
+- **Fecha registro:** fecha en que el usuario fue creado/registrado.
+- **Columnas de actividad mensual:** columnas nombradas con los meses (Ej: Ene, Feb, Mar, etc.) con valor "SÍ" si el usuario estuvo activo ese mes, o vacío/cero si no.
+""")
 
-if archivo:
+# Subida de archivo Excel
+archivo = st.file_uploader("Subí tu archivo Excel", type=["xlsx", "xls"])
+if archivo is not None:
+    # Leer Excel
     df = pd.read_excel(archivo)
-    st.write("Vista previa del archivo:")
+
+    # Mostrar primeras filas
+    st.write("Primeras filas del archivo:")
     st.dataframe(df.head())
 
-    # Lista de columnas de meses en orden
-    meses = ['ago', 'sep', 'oct', 'nov', 'dic', 'ene', 'feb', 'mar', 'abr', 'may']
-    meses_presentes = [m for m in meses if m in df.columns]
+    # Verificar columnas clave
+    required_cols = ['Usuario', 'Fecha registro']
+    if not all(col in df.columns for col in required_cols):
+        st.error(f"Faltan columnas obligatorias: {', '.join(required_cols)}")
+        st.stop()
 
-    usuarios_abandono = []
-    usuarios_activos = []
+    # Convertir Fecha registro a datetime y extraer mes cohorte (primer día del mes)
+    df['Fecha registro'] = pd.to_datetime(df['Fecha registro'], errors='coerce')
+    if df['Fecha registro'].isnull().any():
+        st.warning("Hay fechas inválidas en 'Fecha registro' que se ignorarán.")
+    df = df.dropna(subset=['Fecha registro'])
+    df['Mes cohorte'] = df['Fecha registro'].dt.to_period('M').dt.to_timestamp()
 
-    for _, row in df.iterrows():
-        user = row['usuario']
-        registro = row['fecha registro']
-        abandono = None
+    # Detectar columnas de actividad mensual (todas menos Usuario, Fecha registro, Mes cohorte)
+    actividad_cols = [c for c in df.columns if c not in ['Usuario', 'Fecha registro', 'Mes cohorte']]
+    if len(actividad_cols) == 0:
+        st.error("No se detectaron columnas de actividad mensual.")
+        st.stop()
 
-        for i, mes in enumerate(meses_presentes):
-            valor = row[mes]
-            if pd.isna(valor) or valor == 0:
-                actividad_antes = row[meses_presentes[:i]]
-                if actividad_antes.notna().any() and (actividad_antes != 0).any():
-                    abandono = mes
-                    break
+    # Ordenar columnas actividad por orden mensual, si posible
+    # (Por ejemplo, si son abreviaturas de meses en español: Ene, Feb, Mar, ...)
+    meses_orden = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic']
+    # Ordenar solo las que existan
+    actividad_cols_sorted = [m for m in meses_orden if m in actividad_cols]
+    # Agregar otras columnas que no estén en la lista meses_orden (en orden original)
+    actividad_cols_otros = [c for c in actividad_cols if c not in meses_orden]
+    actividad_cols_sorted.extend(actividad_cols_otros)
 
-        if abandono:
-            usuarios_abandono.append({'usuario': user, 'fecha registro': registro, 'mes_abandono': abandono})
-        else:
-            usuarios_activos.append({'usuario': user, 'fecha registro': registro})
+    # Construir matriz de retención
+    cohort_data = {}
 
-    df_abandono = pd.DataFrame(usuarios_abandono)
-    df_activos = pd.DataFrame(usuarios_activos)
+    for cohorte, grupo in df.groupby('Mes cohorte'):
+        total_usuarios = grupo['Usuario'].nunique()
+        cohort_data[cohorte] = [total_usuarios]
+        # Para cada mes desde creación:
+        for i, col in enumerate(actividad_cols_sorted):
+            # Usuarios activos (donde la columna actividad es "SÍ" (mayúsc/minúsc))
+            activos = grupo[grupo[col].astype(str).str.strip().str.upper() == 'SÍ']['Usuario'].nunique()
+            pct_retencion = activos / total_usuarios if total_usuarios > 0 else 0
+            cohort_data[cohorte].append(pct_retencion)
 
-    st.subheader("Usuarios activos hasta mayo")
-    st.dataframe(df_activos)
+    # Crear DataFrame
+    columnas = ['Total usuarios'] + [f'Mes {i}' for i in range(len(actividad_cols_sorted))]
+    retencion_df = pd.DataFrame.from_dict(cohort_data, orient='index', columns=columnas)
 
-    st.subheader("Usuarios que abandonaron y en qué mes")
-    st.dataframe(df_abandono)
+    # Mostrar tabla de retención (porcentajes en formato %)
+    retencion_mostrar = retencion_df.style.format("{:.1%}")
+    st.subheader("Matriz de Retención por Cohortes")
+    st.dataframe(retencion_mostrar, use_container_width=True)
 
-    # Botones de descarga
-    st.download_button("📥 Descargar usuarios activos", data=df_activos.to_csv(index=False), file_name="usuarios_activos.csv", mime="text/csv")
-    st.download_button("📥 Descargar usuarios abandonados", data=df_abandono.to_csv(index=False), file_name="usuarios_abandonados.csv", mime="text/csv")
+    # Mostrar heatmap
+    st.subheader("Mapa de calor (heatmap) de la retención")
+    fig, ax = plt.subplots(figsize=(12, 6))
+    sns.heatmap(retencion_df.iloc[:,1:], annot=True, fmt=".0%", cmap="YlGnBu", cbar=True, ax=ax)
+    ax.set_ylabel("Mes de Cohorte")
+    ax.set_xlabel("Mes desde registro")
+    st.pyplot(fig)
