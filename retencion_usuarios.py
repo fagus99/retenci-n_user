@@ -1,92 +1,73 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
 import seaborn as sns
-from datetime import datetime
+import matplotlib.pyplot as plt
+import unicodedata
 
-st.title("Análisis de Retención de Usuarios por Cohortes")
+st.title("🔍 Análisis de Retención de Usuarios por Cohortes")
 
 st.markdown("""
-Subí un archivo Excel que contenga las siguientes columnas mínimas:
-- **Usuario**: Identificador único del usuario.
-- **Fecha registro**: Fecha en que el usuario se registró.
-- Columnas de actividad mensual: una columna por cada mes con valores numéricos positivos si hubo actividad, 0 o vacío si no.
-
-El análisis calculará la matriz de retención por cohortes mensuales, considerando solo actividad hasta el mes actual.
+Subí un archivo Excel que contenga:
+- Una columna `Usuario` con identificadores únicos
+- Una columna `Fecha registro` con la fecha de registro
+- Varias columnas con nombres de meses (ej. junio, julio...) indicando si el usuario tuvo actividad ese mes (valores positivos).
 """)
 
-archivo = st.file_uploader("Subí tu archivo Excel", type=["xlsx"])
+# Subida del archivo
+archivo = st.file_uploader("📤 Subí tu archivo Excel", type=["xlsx"])
 
-if archivo:
+if archivo is not None:
     df = pd.read_excel(archivo)
 
-    columnas_minimas = ['Usuario', 'Fecha registro']
-    if not all(col in df.columns for col in columnas_minimas):
-        st.error(f"El archivo debe contener las columnas: {', '.join(columnas_minimas)}")
+    # Normalizar nombres de columnas (sin acentos, minúsculas)
+    def normalizar_columna(col):
+        col = col.lower()
+        col = unicodedata.normalize('NFKD', col).encode('ascii', errors='ignore').decode()
+        return col.strip()
+
+    df.columns = [normalizar_columna(c) for c in df.columns]
+
+    # Asegurar existencia de columnas mínimas
+    if 'usuario' not in df.columns or 'fecha registro' not in df.columns:
+        st.error("El archivo debe tener al menos las columnas 'Usuario' y 'Fecha registro'.")
     else:
-        # Convertir 'Fecha registro' a datetime, sin hora
-        df['Fecha registro'] = pd.to_datetime(df['Fecha registro'], errors='coerce').dt.normalize()
-        df = df.dropna(subset=['Fecha registro'])
+        # Convertir la fecha de registro
+        df['fecha registro'] = pd.to_datetime(df['fecha registro'], errors='coerce')
+        df['cohorte'] = df['fecha registro'].dt.to_period('M').astype(str) + "-01"
 
-        # Formatear la fecha para mostrarla después (en la tabla o como info)
-        df['Fecha registro formateada'] = df['Fecha registro'].dt.strftime('%Y-%m-%d')
+        # Detectar columnas de meses (excluyendo las primeras conocidas)
+        columnas_mes = [col for col in df.columns if col not in ['usuario', 'fecha registro', 'cohorte', 'mes registro', 'anio', 'año']]
 
-        # Extraer Mes de Cohorte (primer día del mes)
-        df['Mes cohorte'] = df['Fecha registro'].dt.to_period('M').dt.to_timestamp()
+        # Convertir columnas de meses a numérico (para detectar valores positivos)
+        for col in columnas_mes:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
 
-        # Columnas de actividad mensual (asumiendo que son todas menos las básicas)
-        actividad_cols = [col for col in df.columns if col not in ['Usuario', 'Fecha registro', 'Fecha registro formateada', 'Mes cohorte']]
+        # Calcular matriz de retención
+        retencion = {}
 
-        if not actividad_cols:
-            st.error("No se detectaron columnas de actividad mensual.")
-        else:
-            actividad_cols_sorted = sorted(actividad_cols)
+        for cohorte, grupo in df.groupby('cohorte'):
+            base = len(grupo)
+            actividad = []
 
-            st.write("Columnas de actividad detectadas:", actividad_cols_sorted)
+            for i, col in enumerate(columnas_mes):
+                activos = grupo[grupo[col] > 0]
+                porcentaje = len(activos) / base if base > 0 else 0
+                actividad.append(round(porcentaje * 100, 1))
 
-            cohort_data = {}
-            fecha_actual = pd.Timestamp(datetime.now().date())
+            retencion[cohorte] = actividad
 
-            # Calculamos el máximo número de meses que puede haber (para mostrar toda la matriz)
-            max_meses = len(actividad_cols_sorted) - 1
+        # Crear DataFrame de retención
+        retencion_df = pd.DataFrame.from_dict(retencion, orient='index', columns=[f"Mes {i}" for i in range(len(columnas_mes))])
+        retencion_df.index.name = "Mes de Cohorte"
 
-            for cohorte, grupo in df.groupby('Mes cohorte'):
-                total_usuarios = grupo['Usuario'].nunique()
+        # Mostrar tabla
+        st.subheader("📋 Tabla de Retención")
+        st.dataframe(retencion_df.style.format("{:.1f}%"))
 
-                # Cuántos meses pasaron desde la cohorte hasta hoy
-                meses_hasta_hoy = (fecha_actual.year - cohorte.year) * 12 + (fecha_actual.month - cohorte.month)
-
-                lista_retencion = [total_usuarios]
-
-                for i, col in enumerate(actividad_cols_sorted):
-                    # Para meses futuros respecto a hoy, poner NaN (sin calcular retención)
-                    if i > meses_hasta_hoy:
-                        lista_retencion.append(np.nan)
-                        continue
-
-                    # Revisar actividad positiva
-                    activos = grupo[grupo[col].apply(lambda x: pd.to_numeric(x, errors='coerce')).fillna(0) > 0]['Usuario'].nunique()
-                    pct_retencion = activos / total_usuarios if total_usuarios > 0 else 0
-                    lista_retencion.append(pct_retencion)
-
-                cohort_data[cohorte] = lista_retencion
-
-            columnas_retorno = ['Total usuarios'] + [f'Mes {i}' for i in range(len(actividad_cols_sorted))]
-
-            retencion_df = pd.DataFrame.from_dict(cohort_data, orient='index', columns=columnas_retorno)
-
-            # Formatear para mostrar porcentaje y total usuarios
-            retencion_pct_df = retencion_df.copy()
-            retencion_pct_df.iloc[:, 1:] = retencion_pct_df.iloc[:, 1:].applymap(lambda x: f"{x:.1%}" if pd.notnull(x) else "")
-
-            st.subheader("Matriz de Retención (porcentaje de usuarios activos)")
-            st.dataframe(retencion_pct_df)
-
-            st.subheader("Heatmap de Retención")
-            plt.figure(figsize=(12, 6))
-            sns.heatmap(retencion_df.iloc[:, 1:], annot=True, fmt=".1%", cmap="YlGnBu", cbar=True, linewidths=.5, linecolor='gray')
-            plt.xlabel("Mes desde la cohorte")
-            plt.ylabel("Mes de cohorte")
-            plt.yticks(rotation=0)
-            st.pyplot(plt.gcf())
+        # Mostrar heatmap
+        st.subheader("🔥 Heatmap de Retención")
+        plt.figure(figsize=(12, len(retencion_df) * 0.5 + 3))
+        sns.heatmap(retencion_df, annot=True, fmt=".1f", cmap="YlGnBu", cbar_kws={'label': '% Retención'})
+        plt.xlabel("Mes desde registro")
+        plt.ylabel("Mes de Cohorte")
+        st.pyplot(plt)
