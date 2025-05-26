@@ -12,7 +12,7 @@ Subí un archivo Excel que contenga las siguientes columnas mínimas:
 - **Usuario**: Identificador único del usuario.
 - **Fecha registro**: Fecha en que el usuario se registró.
 - Columnas de actividad mensual: una columna por cada mes con valores numéricos positivos si hubo actividad, 0 o vacío si no.
-  
+
 El análisis calculará la matriz de retención por cohortes mensuales, considerando solo actividad hasta el mes actual.
 """)
 
@@ -66,4 +66,27 @@ if archivo:
                         continue
 
                     # Revisar actividad positiva
-                    activos = grupo[grupo[col].apply(lambda x: pd.to_numeric(x, errors='coerce')).fillna(0) > 0]['Usuari]()_]()
+                    activos = grupo[grupo[col].apply(lambda x: pd.to_numeric(x, errors='coerce')).fillna(0) > 0]['Usuario'].nunique()
+                    pct_retencion = activos / total_usuarios if total_usuarios > 0 else 0
+                    lista_retencion.append(pct_retencion)
+
+                cohort_data[cohorte] = lista_retencion
+
+            columnas_retorno = ['Total usuarios'] + [f'Mes {i}' for i in range(len(actividad_cols_sorted))]
+
+            retencion_df = pd.DataFrame.from_dict(cohort_data, orient='index', columns=columnas_retorno)
+
+            # Formatear para mostrar porcentaje y total usuarios
+            retencion_pct_df = retencion_df.copy()
+            retencion_pct_df.iloc[:, 1:] = retencion_pct_df.iloc[:, 1:].applymap(lambda x: f"{x:.1%}" if pd.notnull(x) else "")
+
+            st.subheader("Matriz de Retención (porcentaje de usuarios activos)")
+            st.dataframe(retencion_pct_df)
+
+            st.subheader("Heatmap de Retención")
+            plt.figure(figsize=(12, 6))
+            sns.heatmap(retencion_df.iloc[:, 1:], annot=True, fmt=".1%", cmap="YlGnBu", cbar=True, linewidths=.5, linecolor='gray')
+            plt.xlabel("Mes desde la cohorte")
+            plt.ylabel("Mes de cohorte")
+            plt.yticks(rotation=0)
+            st.pyplot(plt.gcf())
