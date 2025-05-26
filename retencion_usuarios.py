@@ -60,10 +60,10 @@ if archivo is not None:
         cohort_data[cohorte] = [total_usuarios]
         # Para cada mes desde creación:
         for i, col in enumerate(actividad_cols_sorted):
-            # Usuarios activos (donde la columna actividad es "SÍ" (mayúsc/minúsc))
-            activos = grupo[grupo[col].astype(str).str.strip().str.upper() == 'SÍ']['Usuario'].nunique()
-            pct_retencion = activos / total_usuarios if total_usuarios > 0 else 0
-            cohort_data[cohorte].append(pct_retencion)
+             # Detectar si valor es positivo numérico (>0)
+        activos = grupo[grupo[col].apply(lambda x: pd.to_numeric(x, errors='coerce')).fillna(0) > 0]['Usuario'].nunique()
+        pct_retencion = activos / total_usuarios if total_usuarios > 0 else 0
+        cohort_data[cohorte].append(pct_retencion)
 
     # Crear DataFrame
     columnas = ['Total usuarios'] + [f'Mes {i}' for i in range(len(actividad_cols_sorted))]
